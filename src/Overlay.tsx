@@ -85,39 +85,61 @@ function Overlay() {
   }, []);
 
   return (
-    <div className="w-screen h-screen flex items-center justify-center bg-zinc-900/95 backdrop-blur-xl rounded-2xl select-none">
-      {state === "recording" && (
-        <div className="flex items-center gap-3">
-          <AudioWaveform className="h-6 w-6 text-cyan-400 animate-pulse" />
-          <span className="text-sm font-medium text-white/90">Speak</span>
-        </div>
-      )}
+    <div className="w-screen h-screen flex items-center justify-center bg-gradient-to-br from-zinc-900/95 to-zinc-950/95 backdrop-blur-xl rounded-2xl select-none relative">
+      {/* Glow effect background */}
+      <div className="absolute inset-0 flex items-center justify-center -z-10 blur-3xl opacity-30">
+        {state === "recording" && (
+          <div className="w-32 h-32 bg-cyan-500 rounded-full animate-pulse" />
+        )}
+        {state === "transcribing" && (
+          <div className="w-32 h-32 bg-blue-500 rounded-full animate-pulse" />
+        )}
+        {state === "error" && (
+          <div className="w-32 h-32 bg-yellow-500 rounded-full" />
+        )}
+        {state === "no_model" && (
+          <div className="w-32 h-32 bg-orange-500 rounded-full" />
+        )}
+      </div>
 
-      {state === "transcribing" && (
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Loader2 className="h-6 w-6 text-cyan-400 animate-spin" />
-            <div className="absolute inset-0 h-6 w-6 rounded-full bg-cyan-400/20 animate-ping" />
+      {/* Content with transition */}
+      <div className="transition-all duration-300 ease-in-out">
+        {state === "recording" && (
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <AudioWaveform className="h-7 w-7 text-cyan-400 animate-pulse drop-shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
+              <div className="absolute inset-0 h-7 w-7 rounded-full bg-cyan-400/20 animate-ping" />
+            </div>
+            <span className="text-base font-semibold text-white tracking-wide drop-shadow-lg">Listening...</span>
           </div>
-          <span className="text-sm font-medium text-white/90">Transcribing...</span>
-        </div>
-      )}
+        )}
 
-      {state === "error" && (
-        <div className="flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-yellow-400" />
-          <span className="text-sm font-medium text-white/90 max-w-[200px] truncate">
-            {errorMessage || "Error"}
-          </span>
-        </div>
-      )}
+        {state === "transcribing" && (
+          <div className="flex items-center gap-4">
+            <div className="relative">
+              <Loader2 className="h-7 w-7 text-blue-400 animate-spin drop-shadow-[0_0_8px_rgba(96,165,250,0.6)]" />
+              <div className="absolute inset-0 h-7 w-7 rounded-full bg-blue-400/20 animate-ping" />
+            </div>
+            <span className="text-base font-semibold text-white tracking-wide drop-shadow-lg">Transcribing...</span>
+          </div>
+        )}
 
-      {state === "no_model" && (
-        <div className="flex items-center gap-3">
-          <XCircle className="h-5 w-5 text-orange-400" />
-          <span className="text-sm font-medium text-white/90">No model selected</span>
-        </div>
-      )}
+        {state === "error" && (
+          <div className="flex items-center gap-4">
+            <AlertTriangle className="h-6 w-6 text-yellow-400 animate-pulse drop-shadow-[0_0_8px_rgba(250,204,21,0.6)]" />
+            <span className="text-base font-semibold text-white max-w-[280px] truncate drop-shadow-lg">
+              {errorMessage || "Error occurred"}
+            </span>
+          </div>
+        )}
+
+        {state === "no_model" && (
+          <div className="flex items-center gap-4">
+            <XCircle className="h-6 w-6 text-orange-400 drop-shadow-[0_0_8px_rgba(251,146,60,0.6)]" />
+            <span className="text-base font-semibold text-white drop-shadow-lg">No model selected</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

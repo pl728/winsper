@@ -16,6 +16,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent,
 };
+use tauri_plugin_autostart::MacosLauncher;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Preset model definition
@@ -39,36 +40,252 @@ pub struct ModelInfo {
     pub active: bool,
 }
 
+/// Audio input device info
+#[derive(Clone, Serialize)]
+pub struct AudioDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
 /// Get list of preset models
 fn get_preset_models() -> Vec<PresetModel> {
     vec![
+        // ===== English-only models =====
         PresetModel {
             id: "tiny.en".to_string(),
             name: "Tiny (English)".to_string(),
             filename: "ggml-tiny.en.bin".to_string(),
-            size: "75 MB".to_string(),
+            size: "78 MB".to_string(),
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin".to_string(),
         },
         PresetModel {
             id: "base.en".to_string(),
             name: "Base (English)".to_string(),
             filename: "ggml-base.en.bin".to_string(),
-            size: "142 MB".to_string(),
+            size: "148 MB".to_string(),
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin".to_string(),
         },
         PresetModel {
             id: "small.en".to_string(),
             name: "Small (English)".to_string(),
             filename: "ggml-small.en.bin".to_string(),
-            size: "466 MB".to_string(),
+            size: "488 MB".to_string(),
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
         },
         PresetModel {
             id: "medium.en".to_string(),
             name: "Medium (English)".to_string(),
             filename: "ggml-medium.en.bin".to_string(),
-            size: "1.5 GB".to_string(),
+            size: "1.53 GB".to_string(),
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin".to_string(),
+        },
+        // ===== Multilingual models =====
+        PresetModel {
+            id: "tiny".to_string(),
+            name: "Tiny (Multilingual)".to_string(),
+            filename: "ggml-tiny.bin".to_string(),
+            size: "78 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin".to_string(),
+        },
+        PresetModel {
+            id: "base".to_string(),
+            name: "Base (Multilingual)".to_string(),
+            filename: "ggml-base.bin".to_string(),
+            size: "148 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin".to_string(),
+        },
+        PresetModel {
+            id: "small".to_string(),
+            name: "Small (Multilingual)".to_string(),
+            filename: "ggml-small.bin".to_string(),
+            size: "488 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium".to_string(),
+            name: "Medium (Multilingual)".to_string(),
+            filename: "ggml-medium.bin".to_string(),
+            size: "1.53 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin".to_string(),
+        },
+        // ===== Large models =====
+        PresetModel {
+            id: "large-v1".to_string(),
+            name: "Large v1".to_string(),
+            filename: "ggml-large-v1.bin".to_string(),
+            size: "3.09 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v2".to_string(),
+            name: "Large v2".to_string(),
+            filename: "ggml-large-v2.bin".to_string(),
+            size: "3.09 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v3".to_string(),
+            name: "Large v3 (Best)".to_string(),
+            filename: "ggml-large-v3.bin".to_string(),
+            size: "3.1 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v3-turbo".to_string(),
+            name: "Large v3 Turbo (Fast)".to_string(),
+            filename: "ggml-large-v3-turbo.bin".to_string(),
+            size: "1.62 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
+        },
+        // ===== Quantized Q5 models (smaller file sizes) =====
+        PresetModel {
+            id: "tiny.en-q5_1".to_string(),
+            name: "Tiny Q5 (English)".to_string(),
+            filename: "ggml-tiny.en-q5_1.bin".to_string(),
+            size: "32 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "tiny-q5_1".to_string(),
+            name: "Tiny Q5 (Multilingual)".to_string(),
+            filename: "ggml-tiny-q5_1.bin".to_string(),
+            size: "32 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "base.en-q5_1".to_string(),
+            name: "Base Q5 (English)".to_string(),
+            filename: "ggml-base.en-q5_1.bin".to_string(),
+            size: "60 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "base-q5_1".to_string(),
+            name: "Base Q5 (Multilingual)".to_string(),
+            filename: "ggml-base-q5_1.bin".to_string(),
+            size: "60 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "small.en-q5_1".to_string(),
+            name: "Small Q5 (English)".to_string(),
+            filename: "ggml-small.en-q5_1.bin".to_string(),
+            size: "190 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "small-q5_1".to_string(),
+            name: "Small Q5 (Multilingual)".to_string(),
+            filename: "ggml-small-q5_1.bin".to_string(),
+            size: "190 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium.en-q5_0".to_string(),
+            name: "Medium Q5 (English)".to_string(),
+            filename: "ggml-medium.en-q5_0.bin".to_string(),
+            size: "539 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-q5_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium-q5_0".to_string(),
+            name: "Medium Q5 (Multilingual)".to_string(),
+            filename: "ggml-medium-q5_0.bin".to_string(),
+            size: "539 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v2-q5_0".to_string(),
+            name: "Large v2 Q5".to_string(),
+            filename: "ggml-large-v2-q5_0.bin".to_string(),
+            size: "1.08 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q5_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v3-q5_0".to_string(),
+            name: "Large v3 Q5".to_string(),
+            filename: "ggml-large-v3-q5_0.bin".to_string(),
+            size: "1.08 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v3-turbo-q5_0".to_string(),
+            name: "Large v3 Turbo Q5".to_string(),
+            filename: "ggml-large-v3-turbo-q5_0.bin".to_string(),
+            size: "574 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
+        },
+        // ===== Quantized Q8 models (better quality than Q5, larger than Q5) =====
+        PresetModel {
+            id: "tiny.en-q8_0".to_string(),
+            name: "Tiny Q8 (English)".to_string(),
+            filename: "ggml-tiny.en-q8_0.bin".to_string(),
+            size: "44 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "tiny-q8_0".to_string(),
+            name: "Tiny Q8 (Multilingual)".to_string(),
+            filename: "ggml-tiny-q8_0.bin".to_string(),
+            size: "44 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "base.en-q8_0".to_string(),
+            name: "Base Q8 (English)".to_string(),
+            filename: "ggml-base.en-q8_0.bin".to_string(),
+            size: "82 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "base-q8_0".to_string(),
+            name: "Base Q8 (Multilingual)".to_string(),
+            filename: "ggml-base-q8_0.bin".to_string(),
+            size: "82 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "small.en-q8_0".to_string(),
+            name: "Small Q8 (English)".to_string(),
+            filename: "ggml-small.en-q8_0.bin".to_string(),
+            size: "264 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "small-q8_0".to_string(),
+            name: "Small Q8 (Multilingual)".to_string(),
+            filename: "ggml-small-q8_0.bin".to_string(),
+            size: "264 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium.en-q8_0".to_string(),
+            name: "Medium Q8 (English)".to_string(),
+            filename: "ggml-medium.en-q8_0.bin".to_string(),
+            size: "823 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium-q8_0".to_string(),
+            name: "Medium Q8 (Multilingual)".to_string(),
+            filename: "ggml-medium-q8_0.bin".to_string(),
+            size: "823 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v2-q8_0".to_string(),
+            name: "Large v2 Q8".to_string(),
+            filename: "ggml-large-v2-q8_0.bin".to_string(),
+            size: "1.66 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q8_0.bin".to_string(),
+        },
+        PresetModel {
+            id: "large-v3-turbo-q8_0".to_string(),
+            name: "Large v3 Turbo Q8".to_string(),
+            filename: "ggml-large-v3-turbo-q8_0.bin".to_string(),
+            size: "874 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin".to_string(),
         },
     ]
 }
@@ -276,7 +493,7 @@ fn hide_overlay(app: &AppHandle) {
     }
 }
 
-/// Starts audio recording using the default input device
+/// Starts audio recording using the selected input device (or default if none selected)
 fn start_audio_recording(app: AppHandle, audio_ctx: SharedAudio) {
     // Get the stop signal before spawning thread
     let stop_signal = {
@@ -284,11 +501,28 @@ fn start_audio_recording(app: AppHandle, audio_ctx: SharedAudio) {
         ctx.stop_signal.store(false, Ordering::SeqCst);
         ctx.stop_signal.clone()
     };
+    
+    // Get the selected microphone from config
+    let selected_mic = load_selected_microphone(&app);
 
     std::thread::spawn(move || {
         let host = cpal::default_host();
         
-        let device = match host.default_input_device() {
+        // Find the selected device or fall back to default
+        let device = if let Some(ref mic_name) = selected_mic {
+            // Try to find the selected device
+            host.input_devices()
+                .ok()
+                .and_then(|mut devices| devices.find(|d| d.name().ok().as_ref() == Some(mic_name)))
+                .or_else(|| {
+                    eprintln!("[Audio] Selected device '{}' not found, using default", mic_name);
+                    host.default_input_device()
+                })
+        } else {
+            host.default_input_device()
+        };
+        
+        let device = match device {
             Some(d) => d,
             None => {
                 eprintln!("[Audio] No input device available");
@@ -712,32 +946,64 @@ fn get_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir.join("config.json"))
 }
 
+/// Load the full config
+fn load_config(app: &AppHandle) -> serde_json::Value {
+    let config_path = match get_config_path(app) {
+        Ok(p) => p,
+        Err(_) => return serde_json::json!({}),
+    };
+    
+    if !config_path.exists() {
+        return serde_json::json!({});
+    }
+    
+    std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or(serde_json::json!({}))
+}
+
+/// Save the full config
+fn save_config(app: &AppHandle, config: &serde_json::Value) -> Result<(), String> {
+    let config_path = get_config_path(app)?;
+    std::fs::write(&config_path, serde_json::to_string_pretty(config).unwrap())
+        .map_err(|e| format!("Failed to save config: {:?}", e))?;
+    Ok(())
+}
+
 /// Save the selected model ID to config
 fn save_selected_model(app: &AppHandle, model_id: &str) -> Result<(), String> {
-    let config_path = get_config_path(app)?;
-    let config = serde_json::json!({
-        "selected_model": model_id
-    });
-    
-    std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
-        .map_err(|e| format!("Failed to save config: {:?}", e))?;
-    
+    let mut config = load_config(app);
+    config["selected_model"] = serde_json::json!(model_id);
+    save_config(app, &config)?;
     println!("[Config] Saved selected model: {}", model_id);
     Ok(())
 }
 
 /// Load the selected model ID from config
 fn load_selected_model(app: &AppHandle) -> Option<String> {
-    let config_path = get_config_path(app).ok()?;
-    
-    if !config_path.exists() {
-        return None;
-    }
-    
-    let contents = std::fs::read_to_string(&config_path).ok()?;
-    let config: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    
+    let config = load_config(app);
     config.get("selected_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Save the selected microphone to config
+fn save_selected_microphone(app: &AppHandle, device_name: Option<&str>) -> Result<(), String> {
+    let mut config = load_config(app);
+    config["selected_microphone"] = match device_name {
+        Some(name) => serde_json::json!(name),
+        None => serde_json::Value::Null,
+    };
+    save_config(app, &config)?;
+    println!("[Config] Saved selected microphone: {:?}", device_name);
+    Ok(())
+}
+
+/// Load the selected microphone from config
+fn load_selected_microphone(app: &AppHandle) -> Option<String> {
+    let config = load_config(app);
+    config.get("selected_microphone")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
 }
@@ -909,12 +1175,75 @@ fn load_model(app: AppHandle, model_id: String, state: tauri::State<SharedWhispe
     Ok(format!("Loaded: {}", preset.name))
 }
 
+/// Tauri command to check if autostart is enabled
+#[tauri::command]
+fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("Failed to check autostart: {:?}", e))
+}
+
+/// Tauri command to set autostart enabled/disabled
+#[tauri::command]
+fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = app.autolaunch();
+    
+    if enabled {
+        autostart.enable().map_err(|e| format!("Failed to enable autostart: {:?}", e))
+    } else {
+        autostart.disable().map_err(|e| format!("Failed to disable autostart: {:?}", e))
+    }
+}
+
+/// Tauri command to list available audio input devices
+#[tauri::command]
+fn list_audio_devices(app: AppHandle) -> Result<Vec<AudioDeviceInfo>, String> {
+    let host = cpal::default_host();
+    let default_device = host.default_input_device();
+    let default_name = default_device.as_ref().and_then(|d| d.name().ok());
+    
+    // Get saved selection
+    let selected_mic = load_selected_microphone(&app);
+    
+    let devices: Vec<AudioDeviceInfo> = host
+        .input_devices()
+        .map_err(|e| format!("Failed to enumerate devices: {:?}", e))?
+        .filter_map(|device| {
+            let name = device.name().ok()?;
+            let is_default = default_name.as_ref().map_or(false, |d| d == &name);
+            Some(AudioDeviceInfo {
+                id: name.clone(),
+                name,
+                is_default,
+            })
+        })
+        .collect();
+    
+    println!("[Audio] Found {} input devices, selected: {:?}", devices.len(), selected_mic);
+    Ok(devices)
+}
+
+/// Tauri command to get the currently selected microphone
+#[tauri::command]
+fn get_selected_microphone(app: AppHandle) -> Option<String> {
+    load_selected_microphone(&app)
+}
+
+/// Tauri command to set the selected microphone
+#[tauri::command]
+fn set_selected_microphone(app: AppHandle, device_name: Option<String>) -> Result<(), String> {
+    save_selected_microphone(&app, device_name.as_deref())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![greet, set_active_model, get_active_model, list_models, download_model, load_model])
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
+        .invoke_handler(tauri::generate_handler![greet, set_active_model, get_active_model, list_models, download_model, load_model, get_autostart_enabled, set_autostart_enabled, list_audio_devices, get_selected_microphone, set_selected_microphone])
         .setup(|app| {
             // Initialize recording state
             let recording_state = Arc::new(RecordingState {

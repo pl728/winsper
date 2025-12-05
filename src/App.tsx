@@ -5,11 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Layers, Keyboard, FileText, Circle, Download, Check, Loader2 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Layers, Settings, Circle, Download, Check, Loader2, Power, Mic } from "lucide-react";
 import "@/index.css";
 
-type Tab = "model" | "hotkey" | "activity";
+type Tab = "model" | "settings";
 
 interface ModelInfo {
   id: string;
@@ -20,11 +27,10 @@ interface ModelInfo {
   active: boolean;
 }
 
-interface ActivityItem {
-  id: number;
-  type: "transcription" | "error" | "info";
-  message: string;
-  timestamp: Date;
+interface AudioDeviceInfo {
+  id: string;
+  name: string;
+  is_default: boolean;
 }
 
 function App() {
@@ -36,25 +42,10 @@ function App() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
 
-  // Hotkey state
-  const [lastHotkey, setLastHotkey] = useState<string>("None");
-  const [isRecording, setIsRecording] = useState(false);
-
-  // Activity log
-  const [activities, setActivities] = useState<ActivityItem[]>([]);
-  const [activityId, setActivityId] = useState(0);
-
-  // Add activity helper
-  const addActivity = (type: ActivityItem["type"], message: string) => {
-    setActivityId((prev) => {
-      const newId = prev + 1;
-      setActivities((acts) => [
-        { id: newId, type, message, timestamp: new Date() },
-        ...acts.slice(0, 49),
-      ]);
-      return newId;
-    });
-  };
+  // Settings state
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceInfo[]>([]);
+  const [selectedMicrophone, setSelectedMicrophone] = useState<string | null>(null);
 
   // Load models list
   const refreshModels = async () => {
@@ -66,36 +57,33 @@ function App() {
     }
   };
 
+  // Load audio devices list
+  const refreshAudioDevices = async () => {
+    try {
+      const devices = await invoke<AudioDeviceInfo[]>("list_audio_devices");
+      setAudioDevices(devices);
+    } catch (e) {
+      console.error("Failed to list audio devices:", e);
+    }
+  };
+
   // Load initial state
   useEffect(() => {
     refreshModels();
+    refreshAudioDevices();
+    // Load autostart setting
+    invoke<boolean>("get_autostart_enabled")
+      .then(setAutoStartEnabled)
+      .catch(console.error);
+    // Load selected microphone
+    invoke<string | null>("get_selected_microphone")
+      .then(setSelectedMicrophone)
+      .catch(console.error);
   }, []);
 
   // Listen for Tauri events
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
-
-    listen<string>("hotkey_event", (event) => {
-      setLastHotkey(event.payload);
-    }).then((un) => unlisteners.push(un));
-
-    listen("recording_started", () => {
-      setIsRecording(true);
-      addActivity("info", "Recording started...");
-    }).then((un) => unlisteners.push(un));
-
-    listen("recording_stopped", () => {
-      setIsRecording(false);
-      addActivity("info", "Recording stopped, processing...");
-    }).then((un) => unlisteners.push(un));
-
-    listen<string>("transcription_done", (event) => {
-      addActivity("transcription", event.payload);
-    }).then((un) => unlisteners.push(un));
-
-    listen<string>("transcription_error", (event) => {
-      addActivity("error", event.payload);
-    }).then((un) => unlisteners.push(un));
 
     // Download events
     listen<string>("download_started", (event) => {
@@ -122,9 +110,8 @@ function App() {
     try {
       setDownloadingModel(modelId);
       await invoke("download_model", { modelId });
-      addActivity("info", `Downloaded model: ${modelId}`);
     } catch (e) {
-      addActivity("error", `Failed to download: ${e}`);
+      console.error("Failed to download:", e);
       setDownloadingModel(null);
     }
   };
@@ -134,259 +121,274 @@ function App() {
       setLoadingModel(modelId);
       await invoke("load_model", { modelId });
       await refreshModels();
-      addActivity("info", `Loaded model: ${modelId}`);
     } catch (e) {
-      addActivity("error", `Failed to load model: ${e}`);
+      console.error("Failed to load model:", e);
     } finally {
       setLoadingModel(null);
     }
   };
 
+  const handleAutoStartToggle = async (enabled: boolean) => {
+    try {
+      await invoke("set_autostart_enabled", { enabled });
+      setAutoStartEnabled(enabled);
+    } catch (e) {
+      console.error("Failed to set autostart:", e);
+    }
+  };
+
+  const handleMicrophoneChange = async (value: string) => {
+    try {
+      const deviceName = value === "default" ? null : value;
+      await invoke("set_selected_microphone", { deviceName });
+      setSelectedMicrophone(deviceName);
+    } catch (e) {
+      console.error("Failed to set microphone:", e);
+    }
+  };
+
   const activeModel = models.find((m) => m.active);
+  const defaultDevice = audioDevices.find((d) => d.is_default);
+  const currentMicName = selectedMicrophone || defaultDevice?.name || "System Default";
 
   return (
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
-      <nav className="w-56 border-r bg-card flex flex-col">
-        <div className="p-5 border-b">
-          <h1 className="text-xl font-semibold text-foreground">Winsper</h1>
+      <nav className="w-56 border-r border-border/40 bg-card/50 backdrop-blur-sm flex flex-col">
+        <div className="p-5 border-b border-border/40">
+          <h1 className="text-xl font-semibold text-foreground tracking-tight">Winsper</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">Voice to text</p>
         </div>
         <div className="p-3 flex-1 space-y-1">
           <Button
-            variant={activeTab === "model" ? "default" : "ghost"}
-            className="w-full justify-start gap-3"
+            variant={activeTab === "model" ? "secondary" : "ghost"}
+            className="w-full justify-start gap-3 h-10"
             onClick={() => setActiveTab("model")}
           >
             <Layers className="h-4 w-4" />
             Model
             {activeModel && (
-              <Circle className="h-2 w-2 ml-auto fill-green-500 text-green-500" />
+              <Circle className="h-2 w-2 ml-auto fill-emerald-500 text-emerald-500" />
             )}
             {!activeModel && (
-              <Circle className="h-2 w-2 ml-auto text-yellow-500" />
+              <Circle className="h-2 w-2 ml-auto fill-amber-500 text-amber-500" />
             )}
           </Button>
           <Button
-            variant={activeTab === "hotkey" ? "default" : "ghost"}
-            className="w-full justify-start gap-3"
-            onClick={() => setActiveTab("hotkey")}
+            variant={activeTab === "settings" ? "secondary" : "ghost"}
+            className="w-full justify-start gap-3 h-10"
+            onClick={() => setActiveTab("settings")}
           >
-            <Keyboard className="h-4 w-4" />
-            Hotkey
-            {isRecording && (
-              <Circle className="h-2 w-2 ml-auto fill-red-500 text-red-500 animate-pulse" />
-            )}
+            <Settings className="h-4 w-4" />
+            Settings
           </Button>
-          <Button
-            variant={activeTab === "activity" ? "default" : "ghost"}
-            className="w-full justify-start gap-3"
-            onClick={() => setActiveTab("activity")}
-          >
-            <FileText className="h-4 w-4" />
-            Activity
-            {activities.length > 0 && (
-              <Badge variant="secondary" className="ml-auto text-xs">
-                {activities.length}
-              </Badge>
-            )}
-          </Button>
+        </div>
+        <div className="p-3 border-t border-border/40">
+          <p className="text-[10px] text-muted-foreground/60 text-center">
+            Press <kbd className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono">Right Ctrl</kbd> to record
+          </p>
         </div>
       </nav>
 
       {/* Main Content */}
-      <main className="flex-1 p-8 overflow-auto">
-        <div className="max-w-xl">
-          {/* Model Tab */}
-          {activeTab === "model" && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-2xl font-semibold mb-2 text-foreground">Whisper Models</h2>
-                <p className="text-muted-foreground">Download and select a model for transcription.</p>
-              </div>
+      <main className="flex-1 overflow-hidden">
+        <ScrollArea className="h-full group">
+          <div className="p-8 max-w-2xl">
+            {/* Model Tab */}
+            {activeTab === "model" && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-semibold mb-1 text-foreground tracking-tight">Whisper Models</h2>
+                  <p className="text-sm text-muted-foreground">Download and select a model for transcription.</p>
+                </div>
 
-              {/* Status */}
-              <Card>
-                <CardContent className="flex items-center gap-3 p-4">
-                  <Circle
-                    className={`h-3 w-3 ${
-                      activeModel
-                        ? "fill-green-500 text-green-500"
-                        : "text-muted-foreground"
-                    }`}
-                  />
-                  <span className="text-sm text-foreground">
-                    {activeModel
-                      ? `Active: ${activeModel.name}`
-                      : "No model loaded - select one below"}
-                  </span>
-                </CardContent>
-              </Card>
+                {/* Status */}
+                <Card className="border-border/40 bg-card/50">
+                  <CardContent className="flex items-center gap-3 p-4">
+                    <div className={`h-2 w-2 rounded-full ${activeModel ? "bg-emerald-500" : "bg-amber-500"}`} />
+                    <span className="text-sm text-foreground">
+                      {activeModel
+                        ? `Active: ${activeModel.name}`
+                        : "No model loaded - select one below"}
+                    </span>
+                  </CardContent>
+                </Card>
 
-              {/* Model List */}
-              <div className="space-y-2">
-                {models.map((model) => (
-                  <Card key={model.id} className={model.active ? "ring-2 ring-green-500" : ""}>
-                    <CardContent className="flex items-center justify-between p-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground">{model.name}</span>
-                          {model.active && (
-                            <Badge variant="default" className="text-xs bg-green-600">
-                              Active
-                            </Badge>
+                {/* Model List */}
+                <div className="space-y-2">
+                  {models.map((model) => (
+                    <Card 
+                      key={model.id} 
+                      className={`border-border/40 bg-card/50 transition-all duration-200 ${
+                        model.active ? "ring-1 ring-emerald-500/50 bg-emerald-500/5" : "hover:bg-accent/50"
+                      }`}
+                    >
+                      <CardContent className="flex items-center justify-between p-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-foreground">{model.name}</span>
+                            {model.active && (
+                              <Badge variant="secondary" className="text-[10px] bg-emerald-500/10 text-emerald-500 border-0">
+                                Active
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs text-muted-foreground font-mono truncate">{model.filename}</span>
+                            <span className="text-xs text-muted-foreground">•</span>
+                            <span className="text-xs text-muted-foreground">{model.size}</span>
+                          </div>
+                          {downloadingModel === model.id && (
+                            <div className="mt-3">
+                              <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-primary transition-all duration-300 ease-out"
+                                  style={{ width: `${downloadProgress}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-muted-foreground mt-1.5 block">
+                                Downloading... {downloadProgress}%
+                              </span>
+                            </div>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 mt-1">
-                          <code className="text-xs text-muted-foreground">{model.filename}</code>
-                          <span className="text-xs text-muted-foreground">•</span>
-                          <span className="text-xs text-muted-foreground">{model.size}</span>
+                        <div className="ml-4 shrink-0">
+                          {!model.downloaded ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs border-border/40"
+                              onClick={() => handleDownload(model.id)}
+                              disabled={downloadingModel !== null}
+                            >
+                              {downloadingModel === model.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <>
+                                  <Download className="h-3.5 w-3.5 mr-1.5" />
+                                  Download
+                                </>
+                              )}
+                            </Button>
+                          ) : model.active ? (
+                            <Button size="sm" variant="secondary" className="h-8 text-xs" disabled>
+                              <Check className="h-3.5 w-3.5 mr-1.5" />
+                              Selected
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="h-8 text-xs"
+                              onClick={() => handleLoad(model.id)}
+                              disabled={loadingModel !== null}
+                            >
+                              {loadingModel === model.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                "Select"
+                              )}
+                            </Button>
+                          )}
                         </div>
-                        {downloadingModel === model.id && (
-                          <div className="mt-2">
-                            <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-blue-500 transition-all duration-300"
-                                style={{ width: `${downloadProgress}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground mt-1">
-                              Downloading... {downloadProgress}%
-                            </span>
-                          </div>
-                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                <p className="text-[11px] text-muted-foreground/60">
+                  Models are downloaded from HuggingFace. Larger models are more accurate but slower.
+                </p>
+              </div>
+            )}
+
+            {/* Settings Tab */}
+            {activeTab === "settings" && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-semibold mb-1 text-foreground tracking-tight">Settings</h2>
+                  <p className="text-sm text-muted-foreground">Configure application preferences.</p>
+                </div>
+
+                {/* Microphone Selection */}
+                <Card className="border-border/40 bg-card/50">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                        <Mic className="h-4 w-4 text-primary" />
                       </div>
-                      <div className="ml-4">
-                        {!model.downloaded ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleDownload(model.id)}
-                            disabled={downloadingModel !== null}
-                          >
-                            {downloadingModel === model.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <>
-                                <Download className="h-4 w-4 mr-1" />
-                                Download
-                              </>
-                            )}
-                          </Button>
-                        ) : model.active ? (
-                          <Button size="sm" variant="secondary" disabled>
-                            <Check className="h-4 w-4 mr-1" />
-                            Selected
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            onClick={() => handleLoad(model.id)}
-                            disabled={loadingModel !== null}
-                          >
-                            {loadingModel === model.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              "Select"
-                            )}
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                Models are downloaded from HuggingFace. Larger models are more accurate but slower.
-              </p>
-            </div>
-          )}
-
-          {/* Hotkey Tab */}
-          {activeTab === "hotkey" && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-2xl font-semibold mb-2 text-foreground">Hotkey Test</h2>
-                <p className="text-muted-foreground">Test that your hotkeys are being detected properly.</p>
-              </div>
-
-              <Card>
-                <CardContent className="p-0">
-                  <div className="flex justify-between items-center p-4">
-                    <span className="text-muted-foreground">Last Detected Key</span>
-                    <Badge variant={lastHotkey !== "None" ? "default" : "secondary"}>
-                      {lastHotkey}
-                    </Badge>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-between items-center p-4">
-                    <span className="text-muted-foreground">Recording Status</span>
-                    <Badge variant={isRecording ? "destructive" : "secondary"} className="gap-2">
-                      <Circle className={`h-2 w-2 ${isRecording ? "fill-current animate-pulse" : ""}`} />
-                      {isRecording ? "Recording..." : "Not Recording"}
-                    </Badge>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardContent className="p-4 text-sm text-muted-foreground space-y-2">
-                  <p className="font-medium text-foreground">How to Use</p>
-                  <p>
-                    Press <kbd className="px-2 py-1 rounded bg-secondary text-secondary-foreground text-xs font-medium">Right Ctrl</kbd> to toggle recording on/off.
-                  </p>
-                  <p>The transcribed text will be automatically pasted at your cursor position.</p>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-
-          {/* Activity Tab */}
-          {activeTab === "activity" && (
-            <div className="space-y-6">
-              <div>
-                <h2 className="text-2xl font-semibold mb-2 text-foreground">Activity Log</h2>
-                <p className="text-muted-foreground">Recent transcriptions and events.</p>
-              </div>
-
-              <Card>
-                <ScrollArea className="h-[400px]">
-                  {activities.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-[300px] text-center p-6">
-                      <FileText className="h-12 w-12 text-muted-foreground mb-4" />
-                      <p className="text-muted-foreground mb-2">No activity yet</p>
-                      <span className="text-sm text-muted-foreground">
-                        Press <kbd className="px-2 py-1 rounded bg-secondary text-secondary-foreground text-xs font-medium">Right Ctrl</kbd> to start recording
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="p-2 space-y-1">
-                      {activities.map((item) => (
-                        <div
-                          key={item.id}
-                          className={`flex gap-3 p-3 rounded-md text-sm ${
-                            item.type === "transcription"
-                              ? "bg-green-500/10 border-l-2 border-green-500"
-                              : item.type === "error"
-                              ? "bg-red-500/10 border-l-2 border-red-500"
-                              : "bg-muted/50 border-l-2 border-muted"
-                          }`}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground">Microphone</p>
+                        <p className="text-xs text-muted-foreground mb-3">Select which microphone to use for recording</p>
+                        <Select
+                          value={selectedMicrophone || "default"}
+                          onValueChange={handleMicrophoneChange}
                         >
-                          <span className="text-xs text-muted-foreground font-mono shrink-0">
-                            {item.timestamp.toLocaleTimeString()}
-                          </span>
-                          <span className={item.type === "error" ? "text-red-400" : "text-foreground"}>
-                            {item.message}
-                          </span>
-                        </div>
-                      ))}
+                          <SelectTrigger className="w-full h-9 text-xs border-border/40 bg-background/50">
+                            <SelectValue placeholder="Select microphone">
+                              <span className="truncate">{currentMicName}</span>
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="default" className="text-xs">
+                              <div className="flex items-center gap-2">
+                                <span>System Default</span>
+                                {defaultDevice && (
+                                  <span className="text-muted-foreground">({defaultDevice.name})</span>
+                                )}
+                              </div>
+                            </SelectItem>
+                            {audioDevices.map((device) => (
+                              <SelectItem key={device.id} value={device.id} className="text-xs">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate">{device.name}</span>
+                                  {device.is_default && (
+                                    <Badge variant="secondary" className="text-[9px] px-1 py-0">Default</Badge>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
-                  )}
-                </ScrollArea>
-              </Card>
-            </div>
-          )}
-        </div>
+                  </CardContent>
+                </Card>
+
+                {/* Auto-start */}
+                <Card className="border-border/40 bg-card/50">
+                  <CardContent className="p-0">
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                          <Power className="h-4 w-4 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Start on system startup</p>
+                          <p className="text-xs text-muted-foreground">Automatically launch Winsper when Windows starts</p>
+                        </div>
+                      </div>
+                      <Switch
+                        checked={autoStartEnabled}
+                        onCheckedChange={handleAutoStartToggle}
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* How to use */}
+                <Card className="border-border/40 bg-card/50">
+                  <CardContent className="p-4">
+                    <p className="text-xs font-medium text-foreground mb-2">How to Use</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      Press <kbd className="px-1.5 py-0.5 mx-0.5 rounded bg-muted text-[10px] font-mono">Right Ctrl</kbd> to 
+                      start recording. Press again to stop and transcribe. The text will be automatically pasted at your cursor.
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </div>
+        </ScrollArea>
       </main>
     </div>
   );

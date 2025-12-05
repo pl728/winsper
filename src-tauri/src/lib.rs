@@ -606,8 +606,7 @@ fn start_hotkey_listener(
                             let audio_ctx_clone = audio_ctx.clone();
                             std::thread::spawn(move || {
                                 show_overlay(&app_clone);
-                                // Give React time to mount component and set up listeners
-                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                // Emit recording_started immediately so UI resets to recording state
                                 println!("[Hotkey] Emitting recording_started event");
                                 let _ = app_clone.emit("recording_started", ());
                                 

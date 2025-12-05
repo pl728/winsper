@@ -89,7 +89,7 @@ function Overlay() {
       {state === "recording" && (
         <div className="flex items-center gap-3">
           <AudioWaveform className="h-6 w-6 text-cyan-400 animate-pulse" />
-          <span className="text-sm font-medium text-white/90">Speak...</span>
+          <span className="text-sm font-medium text-white/90">Speak</span>
         </div>
       )}
 

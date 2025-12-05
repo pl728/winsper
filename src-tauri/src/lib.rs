@@ -7,14 +7,71 @@ use std::sync::{
 use arboard::Clipboard;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Sample;
+use futures_util::StreamExt;
 use rdev::{listen, simulate, Event, EventType, Key};
 use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use serde::Serialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent,
 };
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+/// Preset model definition
+#[derive(Clone, Serialize)]
+pub struct PresetModel {
+    pub id: String,
+    pub name: String,
+    pub filename: String,
+    pub size: String,
+    pub url: String,
+}
+
+/// Model info returned to frontend
+#[derive(Serialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub filename: String,
+    pub size: String,
+    pub downloaded: bool,
+    pub active: bool,
+}
+
+/// Get list of preset models
+fn get_preset_models() -> Vec<PresetModel> {
+    vec![
+        PresetModel {
+            id: "tiny.en".to_string(),
+            name: "Tiny (English)".to_string(),
+            filename: "ggml-tiny.en.bin".to_string(),
+            size: "75 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin".to_string(),
+        },
+        PresetModel {
+            id: "base.en".to_string(),
+            name: "Base (English)".to_string(),
+            filename: "ggml-base.en.bin".to_string(),
+            size: "142 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin".to_string(),
+        },
+        PresetModel {
+            id: "small.en".to_string(),
+            name: "Small (English)".to_string(),
+            filename: "ggml-small.en.bin".to_string(),
+            size: "466 MB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin".to_string(),
+        },
+        PresetModel {
+            id: "medium.en".to_string(),
+            name: "Medium (English)".to_string(),
+            filename: "ggml-medium.en.bin".to_string(),
+            size: "1.5 GB".to_string(),
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin".to_string(),
+        },
+    ]
+}
 
 /// Shared state for tracking recording status
 pub struct RecordingState {
@@ -175,6 +232,47 @@ fn copy_to_clipboard_and_paste(text: &str) -> Result<(), String> {
     copy_to_clipboard(text)?;
     simulate_paste()?;
     Ok(())
+}
+
+/// Shows the overlay window and positions it at the bottom center of the screen
+fn show_overlay(app: &AppHandle) {
+    println!("[Overlay] Attempting to show overlay...");
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        // Get the primary monitor (more reliable than current_monitor for hidden windows)
+        let monitor = overlay.primary_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| overlay.current_monitor().ok().flatten());
+        
+        if let Some(monitor) = monitor {
+            let screen_size = monitor.size();
+            let screen_pos = monitor.position();
+            
+            // Get overlay window size
+            if let Ok(overlay_size) = overlay.outer_size() {
+                // Calculate position: horizontally centered, near the bottom
+                let x = screen_pos.x + (screen_size.width as i32 - overlay_size.width as i32) / 2;
+                let y = screen_pos.y + screen_size.height as i32 - overlay_size.height as i32 - 100; // 100px from bottom
+                
+                let _ = overlay.set_position(PhysicalPosition::new(x, y));
+                println!("[Overlay] Positioned at ({}, {})", x, y);
+            }
+        }
+        
+        let _ = overlay.show();
+        println!("[Overlay] Window shown");
+        // Don't set focus - this would steal keyboard events from rdev
+        // The overlay is just a visual indicator
+    } else {
+        println!("[Overlay] ERROR: Could not find overlay window!");
+    }
+}
+
+/// Hides the overlay window
+fn hide_overlay(app: &AppHandle) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
 }
 
 /// Starts audio recording using the default input device
@@ -386,6 +484,9 @@ fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: S
             Ok(text) => {
                 if text.is_empty() {
                     let _ = app.emit("transcription_error", "No speech detected");
+                    // Hide overlay after a brief delay so user sees the error
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    hide_overlay(&app);
                 } else {
                     // Copy to clipboard and paste
                     match copy_to_clipboard_and_paste(&text) {
@@ -399,11 +500,17 @@ fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: S
                             let _ = app.emit("paste_error", e);
                         }
                     }
+                    // Hide overlay after transcription is done
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    hide_overlay(&app);
                 }
             }
             Err(e) => {
                 eprintln!("[Whisper] Error: {}", e);
                 let _ = app.emit("transcription_error", e);
+                // Hide overlay after a brief delay so user sees the error
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                hide_overlay(&app);
             }
         }
     });
@@ -428,13 +535,46 @@ fn start_hotkey_listener(
                         let currently_recording = recording_state.is_recording.load(Ordering::SeqCst);
 
                         if !currently_recording {
+                            // Check if a model is loaded before starting recording
+                            let model_loaded = whisper_state.lock()
+                                .map(|ws| ws.ctx.is_some())
+                                .unwrap_or(false);
+                            
+                            if !model_loaded {
+                                // Show "no model" message and auto-hide
+                                println!("[Hotkey] No model loaded, cannot start recording");
+                                
+                                let app_clone = app.clone();
+                                std::thread::spawn(move || {
+                                    show_overlay(&app_clone);
+                                    // Give React time to mount component and set up listeners
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                    println!("[Hotkey] Emitting no_model_selected event");
+                                    let _ = app_clone.emit("no_model_selected", ());
+                                    std::thread::sleep(std::time::Duration::from_millis(2000));
+                                    hide_overlay(&app_clone);
+                                });
+                                return;
+                            }
+                            
                             // Start recording
                             recording_state.is_recording.store(true, Ordering::SeqCst);
-                            let _ = app.emit("recording_started", ());
                             println!("[Hotkey] Recording started");
                             
-                            // Start audio capture
-                            start_audio_recording(app.clone(), audio_ctx.clone());
+                            // Show overlay window first, then emit event after a delay
+                            // so React has time to mount and set up event listeners
+                            let app_clone = app.clone();
+                            let audio_ctx_clone = audio_ctx.clone();
+                            std::thread::spawn(move || {
+                                show_overlay(&app_clone);
+                                // Give React time to mount component and set up listeners
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                                println!("[Hotkey] Emitting recording_started event");
+                                let _ = app_clone.emit("recording_started", ());
+                                
+                                // Start audio capture
+                                start_audio_recording(app_clone, audio_ctx_clone);
+                            });
                         } else {
                             // Stop recording
                             recording_state.is_recording.store(false, Ordering::SeqCst);
@@ -442,6 +582,7 @@ fn start_hotkey_listener(
                             println!("[Hotkey] Recording stopped");
                             
                             // Stop audio capture and run transcription
+                            // (overlay will be hidden after transcription completes)
                             stop_audio_recording(app.clone(), audio_ctx.clone(), whisper_state.clone());
                         }
                     }
@@ -499,11 +640,238 @@ fn get_active_model(state: tauri::State<SharedWhisper>) -> Option<String> {
     ws.model_path.as_ref().map(|p| p.to_string_lossy().to_string())
 }
 
+/// Get the models directory path
+fn get_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {:?}", e))?;
+    let models_dir = app_data_dir.join("models");
+    
+    // Create directory if it doesn't exist
+    if !models_dir.exists() {
+        std::fs::create_dir_all(&models_dir)
+            .map_err(|e| format!("Failed to create models directory: {:?}", e))?;
+    }
+    
+    Ok(models_dir)
+}
+
+/// Get the config file path
+fn get_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {:?}", e))?;
+    
+    // Create directory if it doesn't exist
+    if !app_data_dir.exists() {
+        std::fs::create_dir_all(&app_data_dir)
+            .map_err(|e| format!("Failed to create app data directory: {:?}", e))?;
+    }
+    
+    Ok(app_data_dir.join("config.json"))
+}
+
+/// Save the selected model ID to config
+fn save_selected_model(app: &AppHandle, model_id: &str) -> Result<(), String> {
+    let config_path = get_config_path(app)?;
+    let config = serde_json::json!({
+        "selected_model": model_id
+    });
+    
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+        .map_err(|e| format!("Failed to save config: {:?}", e))?;
+    
+    println!("[Config] Saved selected model: {}", model_id);
+    Ok(())
+}
+
+/// Load the selected model ID from config
+fn load_selected_model(app: &AppHandle) -> Option<String> {
+    let config_path = get_config_path(app).ok()?;
+    
+    if !config_path.exists() {
+        return None;
+    }
+    
+    let contents = std::fs::read_to_string(&config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    
+    config.get("selected_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Auto-load the previously selected model on startup
+fn auto_load_model(app: &AppHandle, whisper_state: &SharedWhisper) {
+    if let Some(model_id) = load_selected_model(app) {
+        println!("[Startup] Found saved model: {}", model_id);
+        
+        let presets = get_preset_models();
+        if let Some(preset) = presets.iter().find(|p| p.id == model_id) {
+            if let Ok(models_dir) = get_models_dir(app) {
+                let model_path = models_dir.join(&preset.filename);
+                
+                if model_path.exists() {
+                    let path_str = model_path.to_string_lossy().to_string();
+                    println!("[Startup] Auto-loading model from: {}", path_str);
+                    
+                    match WhisperContext::new_with_params(&path_str, WhisperContextParameters::default()) {
+                        Ok(ctx) => {
+                            if let Ok(mut ws) = whisper_state.lock() {
+                                ws.ctx = Some(ctx);
+                                ws.model_path = Some(model_path);
+                                println!("[Startup] Model loaded successfully: {}", preset.name);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[Startup] Failed to load model: {:?}", e);
+                        }
+                    }
+                } else {
+                    println!("[Startup] Saved model not downloaded: {}", preset.filename);
+                }
+            }
+        }
+    }
+}
+
+/// Tauri command to list all preset models with their status
+#[tauri::command]
+fn list_models(app: AppHandle, whisper_state: tauri::State<SharedWhisper>) -> Result<Vec<ModelInfo>, String> {
+    let models_dir = get_models_dir(&app)?;
+    let presets = get_preset_models();
+    
+    let active_path = whisper_state.lock()
+        .ok()
+        .and_then(|ws| ws.model_path.clone());
+    
+    let models: Vec<ModelInfo> = presets.iter().map(|preset| {
+        let model_path = models_dir.join(&preset.filename);
+        let downloaded = model_path.exists();
+        let active = active_path.as_ref().map_or(false, |p| p == &model_path);
+        
+        ModelInfo {
+            id: preset.id.clone(),
+            name: preset.name.clone(),
+            filename: preset.filename.clone(),
+            size: preset.size.clone(),
+            downloaded,
+            active,
+        }
+    }).collect();
+    
+    Ok(models)
+}
+
+/// Tauri command to download a model
+#[tauri::command]
+async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
+    let presets = get_preset_models();
+    let preset = presets.iter()
+        .find(|p| p.id == model_id)
+        .ok_or_else(|| format!("Unknown model: {}", model_id))?
+        .clone();
+    
+    let models_dir = get_models_dir(&app)?;
+    let model_path = models_dir.join(&preset.filename);
+    
+    // Check if already downloaded
+    if model_path.exists() {
+        return Ok(format!("Model already downloaded: {}", preset.filename));
+    }
+    
+    println!("[Download] Starting download of {} from {}", preset.filename, preset.url);
+    let _ = app.emit("download_started", &model_id);
+    
+    // Download the file
+    let client = reqwest::Client::new();
+    let response = client.get(&preset.url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to start download: {:?}", e))?;
+    
+    let total_size = response.content_length().unwrap_or(0);
+    
+    // Create temp file
+    let temp_path = model_path.with_extension("tmp");
+    let mut file = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create temp file: {:?}", e))?;
+    
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download error: {:?}", e))?;
+        
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
+            .map_err(|e| format!("Failed to write chunk: {:?}", e))?;
+        
+        downloaded += chunk.len() as u64;
+        
+        // Emit progress (throttled to avoid too many events)
+        if total_size > 0 {
+            let progress = (downloaded as f64 / total_size as f64 * 100.0) as u32;
+            let _ = app.emit("download_progress", serde_json::json!({
+                "model_id": model_id,
+                "progress": progress,
+                "downloaded": downloaded,
+                "total": total_size
+            }));
+        }
+    }
+    
+    // Rename temp file to final path
+    tokio::fs::rename(&temp_path, &model_path)
+        .await
+        .map_err(|e| format!("Failed to rename temp file: {:?}", e))?;
+    
+    println!("[Download] Completed: {}", preset.filename);
+    let _ = app.emit("download_complete", &model_id);
+    
+    Ok(format!("Downloaded: {}", preset.filename))
+}
+
+/// Tauri command to load a model by ID
+#[tauri::command]
+fn load_model(app: AppHandle, model_id: String, state: tauri::State<SharedWhisper>) -> Result<String, String> {
+    let presets = get_preset_models();
+    let preset = presets.iter()
+        .find(|p| p.id == model_id)
+        .ok_or_else(|| format!("Unknown model: {}", model_id))?;
+    
+    let models_dir = get_models_dir(&app)?;
+    let model_path = models_dir.join(&preset.filename);
+    
+    if !model_path.exists() {
+        return Err(format!("Model not downloaded: {}", preset.filename));
+    }
+    
+    let path_str = model_path.to_string_lossy().to_string();
+    println!("[Whisper] Loading model from: {}", path_str);
+    
+    // Load the Whisper context
+    let ctx = WhisperContext::new_with_params(&path_str, WhisperContextParameters::default())
+        .map_err(|e| format!("Failed to load Whisper model: {:?}", e))?;
+    
+    // Store in state
+    let mut ws = state.lock().map_err(|e| format!("Lock error: {:?}", e))?;
+    ws.ctx = Some(ctx);
+    ws.model_path = Some(model_path);
+    
+    // Save the selection to config
+    let _ = save_selected_model(&app, &model_id);
+    
+    println!("[Whisper] Model loaded successfully: {}", preset.name);
+    
+    Ok(format!("Loaded: {}", preset.name))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, set_active_model, get_active_model])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![greet, set_active_model, get_active_model, list_models, download_model, load_model])
         .setup(|app| {
             // Initialize recording state
             let recording_state = Arc::new(RecordingState {
@@ -525,6 +893,9 @@ pub fn run() {
             
             // Manage whisper state so it can be accessed by commands
             app.manage(whisper_state.clone());
+            
+            // Auto-load previously selected model
+            auto_load_model(app.handle(), &whisper_state);
             
             // Start hotkey listener with audio context and whisper state
             start_hotkey_listener(app.handle().clone(), recording_state, audio_ctx, whisper_state);

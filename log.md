@@ -299,11 +299,94 @@ fn simulate_paste() -> Result<(), String> {
 5. `transcription_done` event emitted to frontend
 
 ### QA verification:
-- ⏳ Pending test after dev server restart
+- ✅ Text copied to clipboard after transcription
+- ✅ Ctrl+V simulated to paste at cursor position
+
+---
+
+## Step 7: Frontend UI - Overlay ✅
+**Date:** Dec 5, 2025
+
+### What was done:
+
+1. **Added overlay window in `src-tauri/tauri.conf.json`:**
+   ```json
+   {
+     "label": "overlay",
+     "title": "Winsper Overlay",
+     "width": 300,
+     "height": 80,
+     "decorations": false,
+     "transparent": true,
+     "alwaysOnTop": true,
+     "resizable": false,
+     "visible": false,
+     "skipTaskbar": true,
+     "center": true,
+     "shadow": false
+   }
+   ```
+
+2. **Updated `src-tauri/src/lib.rs`:**
+   - Added `PhysicalPosition` import for window positioning
+   - Implemented `show_overlay()` - shows overlay at bottom-center of screen
+   - Implemented `hide_overlay()` - hides overlay window
+   - Called `show_overlay()` when recording starts (hotkey pressed)
+   - Called `hide_overlay()` after transcription completes (success, error, or empty)
+
+3. **Created `src/Overlay.tsx`:**
+   - Listens for Tauri events: `recording_started`, `recording_stopped`, `transcription_started`, `transcription_done`, `transcription_error`
+   - Three states: "recording", "transcribing", "error"
+   - Recording state: Shows waveform SVG icon + "Speak..." text
+   - Transcribing state: Shows spinner + "Transcribing..." text
+   - Error state: Shows warning icon + error message
+
+4. **Created `src/Overlay.css`:**
+   - Single `.overlay-box` fills entire window (no nested elements)
+   - Dark glassmorphism background: `rgba(24, 24, 27, 0.95)`
+   - Backdrop blur effect
+   - Rounded corners (16px)
+   - Pulsing animation on waveform icon
+   - Spinner animation for transcribing state
+   - Fade-in animation on appear
+
+5. **Updated `src/main.tsx`:**
+   - Detects window label using `getCurrentWindow().label`
+   - Renders `<Overlay />` for overlay window
+   - Renders `<App />` for main window
+   - Sets transparent background styles for overlay window
+
+### Key design decisions:
+- **Single box structure** - Removed nested container/content divs to avoid "two boxes" visual issue
+- **No audio waveform visualization** - Simplified to just icon + text for cleaner UX
+- **Inline SVG icon** - Avoided external dependency (react-icons) for simpler setup
+- **Window transparency** - Required `transparent: true`, `shadow: false`, and CSS transparent backgrounds
+
+### Files created/modified:
+- `src/Overlay.tsx` - New overlay component
+- `src/Overlay.css` - New overlay styles
+- `src/main.tsx` - Window detection and routing
+- `src-tauri/tauri.conf.json` - Overlay window config
+- `src-tauri/src/lib.rs` - Show/hide overlay functions
+
+### QA verification:
+- ✅ Overlay appears at bottom-center when Right Ctrl pressed
+- ✅ Shows "Speak..." with waveform icon during recording
+- ✅ Shows "Transcribing..." with spinner after recording stops
+- ✅ Shows error message if transcription fails
+- ✅ Overlay disappears after transcription completes
+- ✅ Hotkey works even when overlay is visible (no focus stealing)
+- ✅ Single dark box with rounded corners (no nested box issue)
+
+### Known issues fixed:
+- Removed `set_focus()` on overlay to prevent keyboard event capture
+- Added `shadow: false` to remove Windows window shadow outline
+- Used single div structure to avoid double-box appearance
 
 ---
 
 ## Next Steps (Pending)
 
-- **Step 7:** Frontend UI (overlay, settings, hotkey test)
+- **Step 7b:** Main window settings UI (model selector, hotkey test)
+- **Step 8:** Production build and testing
 

@@ -76,6 +76,7 @@ fn get_preset_models() -> Vec<PresetModel> {
 /// Shared state for tracking recording status
 pub struct RecordingState {
     pub is_recording: AtomicBool,
+    pub is_processing: AtomicBool,  // True while transcription is in progress
 }
 
 /// Audio context holding captured samples (stream is kept local to recording thread)
@@ -446,12 +447,20 @@ fn start_audio_recording(app: AppHandle, audio_ctx: SharedAudio) {
 }
 
 /// Stops audio recording and runs Whisper transcription
-fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: SharedWhisper) {
+fn stop_audio_recording(
+    app: AppHandle, 
+    audio_ctx: SharedAudio, 
+    whisper_state: SharedWhisper,
+    recording_state: Arc<RecordingState>,
+) {
     // Signal the recording thread to stop
     {
         let ctx = audio_ctx.lock().unwrap();
         ctx.stop_signal.store(true, Ordering::SeqCst);
     }
+    
+    // Mark as processing (transcription in progress)
+    recording_state.is_processing.store(true, Ordering::SeqCst);
     
     // Give a brief moment for the stream to stop
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -477,7 +486,17 @@ fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: S
             "duration_seconds": duration
         }));
         
-        // Run Whisper transcription
+        // Run Whisper transcription - emit to overlay window specifically
+        println!("[Transcription] Emitting transcription_started event");
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            match overlay.emit("transcription_started", ()) {
+                Ok(_) => println!("[Transcription] transcription_started sent to overlay"),
+                Err(e) => println!("[Transcription] Failed to emit to overlay: {:?}", e),
+            }
+        } else {
+            println!("[Transcription] WARNING: overlay window not found");
+        }
+        // Also broadcast to all windows for the main app
         let _ = app.emit("transcription_started", ());
         
         match run_whisper_on_buffer(&buffer, sample_rate, &whisper_state) {
@@ -485,6 +504,12 @@ fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: S
                 if text.is_empty() {
                     let _ = app.emit("transcription_error", "No speech detected");
                     // Hide overlay after a brief delay so user sees the error
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    hide_overlay(&app);
+                } else if text == "[BLANK_AUDIO]" {
+                    // Skip blank audio - don't paste anything
+                    println!("[Whisper] Blank audio detected, skipping paste");
+                    let _ = app.emit("transcription_error", "No speech detected");
                     std::thread::sleep(std::time::Duration::from_millis(1500));
                     hide_overlay(&app);
                 } else {
@@ -513,6 +538,9 @@ fn stop_audio_recording(app: AppHandle, audio_ctx: SharedAudio, whisper_state: S
                 hide_overlay(&app);
             }
         }
+        
+        // Mark processing as complete
+        recording_state.is_processing.store(false, Ordering::SeqCst);
     });
 }
 
@@ -528,11 +556,22 @@ fn start_hotkey_listener(
         let callback = move |event: Event| {
             if let EventType::KeyPress(key) = event.event_type {
                 match key {
+                    Key::ControlLeft => {
+                        // Emit hotkey event for testing UI (left ctrl doesn't trigger recording)
+                        let _ = app.emit("hotkey_event", "LeftCtrl");
+                    }
                     Key::ControlRight => {
                         // Emit hotkey event for testing UI
                         let _ = app.emit("hotkey_event", "RightCtrl");
 
                         let currently_recording = recording_state.is_recording.load(Ordering::SeqCst);
+                        let currently_processing = recording_state.is_processing.load(Ordering::SeqCst);
+
+                        // Don't start a new recording if we're still processing the previous one
+                        if currently_processing && !currently_recording {
+                            println!("[Hotkey] Ignoring - still processing previous transcription");
+                            return;
+                        }
 
                         if !currently_recording {
                             // Check if a model is loaded before starting recording
@@ -583,7 +622,12 @@ fn start_hotkey_listener(
                             
                             // Stop audio capture and run transcription
                             // (overlay will be hidden after transcription completes)
-                            stop_audio_recording(app.clone(), audio_ctx.clone(), whisper_state.clone());
+                            stop_audio_recording(
+                                app.clone(), 
+                                audio_ctx.clone(), 
+                                whisper_state.clone(),
+                                recording_state.clone(),
+                            );
                         }
                     }
                     Key::Alt => {
@@ -876,6 +920,7 @@ pub fn run() {
             // Initialize recording state
             let recording_state = Arc::new(RecordingState {
                 is_recording: AtomicBool::new(false),
+                is_processing: AtomicBool::new(false),
             });
             
             // Initialize audio context
